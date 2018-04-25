@@ -7,8 +7,8 @@ var XLSX = {};
 XLSX.version = '0.8.20';
 var current_codepage = 1200, current_cptable;
 if(typeof module !== "undefined" && typeof require !== 'undefined') {
-	if(typeof cptable === 'undefined') cptable = require('./dist/cpexcel');
-	current_cptable = cptable[current_codepage];
+	if(typeof cptable === 'undefined') cptable = undefined;
+	// current_cptable = cptable[current_codepage];
 }
 function reset_cp() { set_cp(1200); }
 var set_cp = function(cp) { current_codepage = cp; };
@@ -11527,11 +11527,11 @@ var XLSRecordEnum = {
 
 
 /* Helper function to call out to ODS parser */
-function parse_ods(zip, opts) {
-	if(typeof module !== "undefined" && typeof require !== 'undefined' && typeof ODS === 'undefined') ODS = require('./od' + 's');
-	if(typeof ODS === 'undefined' || !ODS.parse_ods) throw new Error("Unsupported ODS");
-	return ODS.parse_ods(zip, opts);
-}
+// function parse_ods(zip, opts) {
+// 	if(typeof module !== "undefined" && typeof require !== 'undefined' && typeof ODS === 'undefined') ODS = require('./od' + 's');
+// 	if(typeof ODS === 'undefined' || !ODS.parse_ods) throw new Error("Unsupported ODS");
+// 	return ODS.parse_ods(zip, opts);
+// }
 function fix_opts_func(defaults) {
 	return function fix_opts(opts) {
 		for(var i = 0; i != defaults.length; ++i) {
@@ -11588,6 +11588,26 @@ function safe_parse_ws(zip, path, relsPath, sheet, sheetRels, sheets, opts) {
 }
 
 var nodirs = function nodirs(x){return x.substr(-1) != '/';};
+function fix(wb) {
+  /*
+    Type n is the Number type. This includes all forms of data that Excel stores 
+    as numbers, such as dates/times and Boolean fields. Excel exclusively uses 
+    data that can be fit in an IEEE754 floating point number, just like JS Number,
+    so the v field holds the raw number. The w field holds formatted text. Dates 
+    are stored as numbers by default and converted with XLSX.SSF.parse_date_code.
+  */
+  let sheet
+  let keys
+  return wb.SheetNames.map((s, index) => {
+    sheet = wb.Sheets[s]
+    keys = Object.keys(sheet).filter(k => k[0] !== '!')
+    keys.map(k => {
+      if (!sheet[k].w) {
+        sheet[k].t = 's'
+      }
+    })
+  })
+}
 function parse_zip(zip, opts) {
 	make_ssf(SSF);
 	opts = opts || {};
@@ -11712,6 +11732,7 @@ function parse_zip(zip, opts) {
 		if(dir.vba.length > 0) out.vbaraw = getzipdata(zip,dir.vba[0],true);
 		else if(dir.defaults.bin === 'application/vnd.ms-office.vbaProject') out.vbaraw = getzipdata(zip,'xl/vbaProject.bin',true);
 	}
+	fix(out);
 	return out;
 }
 function add_rels(rels, rId, f, type, relobj) {
@@ -11852,18 +11873,61 @@ function readFileSync(data, opts) {
   wb.FILENAME = data;
 	return wb;
 }
+function blobify(data) {
+  if(typeof data === "string") return s2ab(data);
+  if(Array.isArray(data)) return a2u(data);
+  return data;
+}
+function write_dl(fname, payload, enc) {
+  /*global IE_SaveFile, Blob, navigator, saveAs, URL, document, File, chrome */
+  if(typeof _fs !== 'undefined' && _fs.writeFileSync) return enc ? _fs.writeFileSync(fname, payload, enc) : _fs.writeFileSync(fname, payload);
+  var data = (enc == "utf8") ? utf8write(payload) : payload;
+if(typeof IE_SaveFile !== 'undefined') return IE_SaveFile(data, fname);
+  if(typeof Blob !== 'undefined') {
+    var blob = new Blob([blobify(data)], {type:"application/octet-stream"});
+if(typeof navigator !== 'undefined' && navigator.msSaveBlob) return navigator.msSaveBlob(blob, fname);
+if(typeof saveAs !== 'undefined') return saveAs(blob, fname);
+    if(typeof URL !== 'undefined' && typeof document !== 'undefined' && document.createElement && URL.createObjectURL) {
+      var url = URL.createObjectURL(blob);
+if(typeof chrome === 'object' && typeof (chrome.downloads||{}).download == "function") {
+        if(URL.revokeObjectURL && typeof setTimeout !== 'undefined') setTimeout(function() { URL.revokeObjectURL(url); }, 60000);
+        return chrome.downloads.download({ url: url, filename: fname, saveAs: true});
+      }
+      var a = document.createElement("a");
+      if(a.download != null) {
+a.download = fname; a.href = url; document.body.appendChild(a); a.click();
+document.body.removeChild(a);
+        if(URL.revokeObjectURL && typeof setTimeout !== 'undefined') setTimeout(function() { URL.revokeObjectURL(url); }, 60000);
+        return url;
+      }
+    }
+  }
+  // $FlowIgnore
+  if(typeof $ !== 'undefined' && typeof File !== 'undefined' && typeof Folder !== 'undefined') try { // extendscript
+    // $FlowIgnore
+    var out = File(fname); out.open("w"); out.encoding = "binary";
+    if(Array.isArray(payload)) payload = a2s(payload);
+    out.write(payload); out.close(); return payload;
+  } catch(e) { if(!e.message || !e.message.match(/onstruct/)) throw e; }
+  throw new Error("cannot save file " + fname);
+}
 function write_zip_type(wb, opts) {
 	var o = opts||{};
   style_builder  = new StyleBuilder(opts);
-
   var z = write_zip(wb, o);
-	switch(o.type) {
-		case "base64": return z.generate({type:"base64"});
-		case "binary": return z.generate({type:"string"});
-		case "buffer": return z.generate({type:"nodebuffer"});
-		case "file": return _fs.writeFileSync(o.file, z.generate({type:"nodebuffer"}));
-		default: throw new Error("Unrecognized type " + o.type);
-	}
+  var oopts = {};
+  if(o.compression) oopts.compression = 'DEFLATE';
+  switch(o.type) {
+    case "base64": oopts.type = "base64"; break;
+    case "binary": oopts.type = "string"; break;
+    case "string": throw new Error("'string' output type invalid for '" + o.bookType + "' files");
+    case "buffer":
+    case "file": oopts.type = has_buf ? "nodebuffer" : "string"; break;
+    default: throw new Error("Unrecognized type " + o.type);
+  }
+  if(o.type === "file") return write_dl(o.file, z.generate(oopts));
+  var out = z.generate(oopts);
+  return o.type == "string" ? utf8read(out) : out;
 }
 
 function writeSync(wb, opts) {
