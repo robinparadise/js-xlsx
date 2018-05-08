@@ -7608,6 +7608,18 @@ function write_ws_xml_merges(merges) {
   return o + '</mergeCells>';
 }
 
+function write_ws_xml_datavalidation(validations) {
+	var o = '<dataValidations>';
+  for(var i=0; i < validations.length; i++) {
+    var validation = validations[i];
+    o += '<dataValidation type="list" allowBlank="1" sqref="' + validation.sqref + '">';
+    o += '<formula1>&quot;' + validation.values + '&quot;</formula1>';
+    o += '</dataValidation>';
+  }
+  o += '</dataValidations>';
+  return o;
+}
+
 function write_ws_xml_pagesetup(setup) {
   var pageSetup = writextag('pageSetup', null, {
     scale: setup.scale || '100',
@@ -7939,6 +7951,7 @@ function write_ws_xml(idx, opts, wb) {
   }
 
   if (ws['!merges'] !== undefined && ws['!merges'].length > 0) o[o.length] = (write_ws_xml_merges(ws['!merges']));
+  if (ws['!dataValidation']) o[o.length] = write_ws_xml_datavalidation(ws['!dataValidation']);
 
   if (ws['!pageSetup'] !== undefined) o[o.length] = write_ws_xml_pagesetup(ws['!pageSetup']);
   if (ws['!rowBreaks'] !== undefined) o[o.length] = write_ws_xml_row_breaks(ws['!rowBreaks']);
